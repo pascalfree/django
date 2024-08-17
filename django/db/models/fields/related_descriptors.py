@@ -94,9 +94,9 @@ class ForeignKeyDeferredAttribute(DeferredAttribute):
         instance.__dict__[self.field.attname] = value
 
 
-def _filter_prefetch_queryset(queryset, field_name, instances):
+def _filter_prefetch_queryset(queryset, field_name, instances, db):
     predicate = Q(**{f"{field_name}__in": instances})
-    db = queryset._db or DEFAULT_DB_ALIAS
+    db = db or DEFAULT_DB_ALIAS
     if queryset.query.is_sliced:
         if not connections[db].features.supports_over_clause:
             raise NotSupportedError(
@@ -785,12 +785,15 @@ def create_reverse_many_to_one_manager(superclass, rel):
                 )
             queryset = querysets[0] if querysets else super().get_queryset()
             queryset._add_hints(instance=instances[0])
-            queryset = queryset.using(queryset._db or self._db)
+            db = queryset._db or self._db
+            queryset = queryset.using(db)
 
             rel_obj_attr = self.field.get_local_related_value
             instance_attr = self.field.get_foreign_related_value
             instances_dict = {instance_attr(inst): inst for inst in instances}
-            queryset = _filter_prefetch_queryset(queryset, self.field.name, instances)
+            queryset = _filter_prefetch_queryset(
+                queryset, self.field.name, instances, db
+            )
 
             # Since we just bypassed this class' get_queryset(), we must manage
             # the reverse relation manually.
@@ -1165,10 +1168,15 @@ def create_forward_many_to_many_manager(superclass, rel, reverse):
                 )
             queryset = querysets[0] if querysets else super().get_queryset()
             queryset._add_hints(instance=instances[0])
-            queryset = queryset.using(queryset._db or self._db)
+            db = queryset._db or self._db
+            # Make sure filters are applied in a "sticky" fashion to reuse
+            # multi-valued relationships like direct filter() calls against
+            # many-to-many managers do.
+            queryset.query.filter_is_sticky = True
             queryset = _filter_prefetch_queryset(
-                queryset._next_is_sticky(), self.query_field_name, instances
+                queryset, self.query_field_name, instances, db
             )
+            queryset = queryset.using(db)
 
             # M2M: need to annotate the query in order to get the primary model
             # that the secondary model was actually related to. We know that

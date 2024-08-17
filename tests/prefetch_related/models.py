@@ -313,3 +313,22 @@ class Flea(models.Model):
     )
     pets_visited = models.ManyToManyField(Pet, related_name="fleas_hosted")
     people_visited = models.ManyToManyField(Person, related_name="fleas_hosted")
+
+
+# Ticket #35677: Unexpected behaviour of Prefetch with queryset filtering on a through model
+
+class Subscriber(models.Model):
+    name = models.CharField(max_length=255)
+    subscriptions = models.ManyToManyField('Subscription', related_name='subscribers', through='Status')
+
+
+class Subscription(models.Model):
+    provider_name = models.CharField(max_length=255)
+
+    objects = models.Manager()
+
+
+class Status(models.Model):
+    subscriber = models.ForeignKey(Subscriber, related_name='status', on_delete=models.CASCADE)
+    subscription = models.ForeignKey(Subscription, related_name='status', on_delete=models.CASCADE)
+    is_active = models.BooleanField(default=True)

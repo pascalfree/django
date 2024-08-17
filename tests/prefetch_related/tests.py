@@ -3,7 +3,7 @@ from unittest import mock
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import NotSupportedError, connection
-from django.db.models import Prefetch, QuerySet, prefetch_related_objects
+from django.db.models import Prefetch, QuerySet, prefetch_related_objects, F
 from django.db.models.fields.related import ForwardManyToOneDescriptor
 from django.db.models.query import get_prefetcher, prefetch_one_level
 from django.db.models.sql import Query
@@ -42,6 +42,9 @@ from .models import (
     TaggedItem,
     Teacher,
     WordEntry,
+    Subscriber,
+    Subscription,
+    Status,
 )
 
 
@@ -2067,3 +2070,61 @@ class DeprecationTests(TestCase):
         )
         self.assertEqual(obj_list, [house])
         self.assertEqual(additional_lookups, [])
+
+
+class PrefetchWithFilterOnThroughModelTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.subscriber1 = Subscriber.objects.create(name="Sofia")
+        subscriber2 = Subscriber.objects.create(name="Peter")
+        cls.subscription1 = Subscription.objects.create(provider_name="ABC")
+        cls.subscription2 = Subscription.objects.create(provider_name="123")
+        Status.objects.create(subscriber=cls.subscriber1, subscription=cls.subscription1,
+                              is_active=True)
+        Status.objects.create(subscriber=cls.subscriber1, subscription=cls.subscription1,
+                              is_active=True)
+        Status.objects.create(subscriber=cls.subscriber1, subscription=cls.subscription2,
+                              is_active=False)
+        Status.objects.create(subscriber=subscriber2, subscription=cls.subscription1,
+                              is_active=True)
+        Status.objects.create(subscriber=subscriber2, subscription=cls.subscription2,
+                              is_active=True)
+
+    def test_custom_qs_with_filter_on_through(self):
+        with self.assertNumQueries(2):
+            subscribers = list(
+                Subscriber.objects.prefetch_related(
+                    Prefetch(
+                        'subscriptions',
+                        queryset=Subscription.objects.filter(status__is_active=True),
+                        to_attr='active_subscriptions'
+                    )
+                ).order_by('id')
+            )
+
+        self.assertEqual(len(subscribers[0].active_subscriptions), 2)
+        self.assertEqual(subscribers[0].active_subscriptions[0], self.subscription1)
+        self.assertEqual(subscribers[0].active_subscriptions[1], self.subscription1)
+        self.assertEqual(len(subscribers[1].active_subscriptions), 2)
+        self.assertEqual(subscribers[1].active_subscriptions[0], self.subscription1)
+        self.assertEqual(subscribers[1].active_subscriptions[1], self.subscription2)
+
+
+    def test_custom_qs_with_filter_and_annotation_on_through(self):
+        with self.assertNumQueries(2):
+            subscribers = list(
+                Subscriber.objects.prefetch_related(
+                    Prefetch(
+                        'subscriptions',
+                        queryset=Subscription.objects.annotate(active=F('status__is_active')).filter(active=True),
+                        to_attr='active_subscriptions'
+                    )
+                ).order_by('id')
+            )
+
+        self.assertEqual(len(subscribers[0].active_subscriptions), 2)
+        self.assertEqual(subscribers[0].active_subscriptions[0], self.subscription1)
+        self.assertEqual(subscribers[0].active_subscriptions[1], self.subscription1)
+        self.assertEqual(len(subscribers[1].active_subscriptions), 2)
+        self.assertEqual(subscribers[1].active_subscriptions[0], self.subscription1)
+        self.assertEqual(subscribers[1].active_subscriptions[1], self.subscription2)
